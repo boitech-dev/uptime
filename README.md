@@ -85,7 +85,7 @@ On the dashboard's server:
 | `uptimectl rename <name> <new name>` | Renames a server |
 | `uptimectl remove <name>` | Removes a server and its history |
 | `uptimectl list` | Lists the servers and their latest sample |
-| `uptimectl password` | Hashes a new password read from stdin, for `UPTIME_PASSWORD_HASH` in `/etc/uptime/env` |
+| `uptimectl password` | Hashes a new password read from stdin: put it in `/etc/uptime/env` as `UPTIME_PASSWORD_HASH`, then `systemctl restart uptime` |
 
 ## How it's measured
 
