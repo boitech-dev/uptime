@@ -48,13 +48,16 @@ describe('the store', () => {
 		store.record(server.id, day2.slice(650)); // overlapping: sent twice
 		const u = store.uptime(store.servers()[0], now)!;
 		assert.equal(u.from, start - 60);
-		assert.equal(u.year.tracked, 2 * DAY + 60);
-		// Down from day 1's last sample (start + DAY - 60) to the boot (start + DAY + 590), and since the latest sample
-		// (a minute before now): no news counts as down until samples arrive.
-		assert.equal(u.year.tracked - u.year.up, 650 + 60);
-		assert.equal(u.year.tracked - u.year.online, 650 + 30 * 60 + 60);
+		// Up to the latest sample, a minute ago: a server that never failed shows 100%.
+		assert.equal(u.year.tracked, 2 * DAY);
+		// Down from day 1's last sample (start + DAY - 60) to the boot (start + DAY + 590).
+		assert.equal(u.year.tracked - u.year.up, 650);
+		assert.equal(u.year.tracked - u.year.online, 650 + 30 * 60);
 		assert.equal(u.days.length, 3);
 		assert.equal(u.days.reduce((s, d) => s + d.tracked, 0), u.year.tracked);
+		// Ten minutes without news: they count as down, all of them.
+		const silent = store.uptime(store.servers()[0], now + 600)!;
+		assert.equal(silent.year.tracked - silent.year.up, 650 + 660);
 		const s = store.servers()[0];
 		assert.deepEqual([s.first_at, s.last_at, s.last_online], [start, day2.at(-1)!.at, 1]);
 	});

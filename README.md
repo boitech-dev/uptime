@@ -95,8 +95,8 @@ doesn't have yet (up to 10,000 at a time). The dashboard turns them into time sp
 - A sample proves the machine ran from its boot until then. So after a restart, the downtime is the time between
   the last sample before it and the new boot.
 - An online sample proves the minute before it was online.
-- The time since a server's latest sample counts as down until its samples arrive: from the dashboard, a server
-  that's down and one that can't reach it look the same until it reports again.
+- Once a server has missed two minutes of samples, the time since its latest one counts as down until its samples
+  arrive: from the dashboard, a server that's down and one that can't reach it look the same until it reports again.
 
 Sending the same samples twice changes nothing, and samples can arrive in any order.
 

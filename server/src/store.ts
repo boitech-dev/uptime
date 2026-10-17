@@ -147,20 +147,20 @@ export function openStore(path: string) {
 		/**
 		 * A server's uptime over the last year and the last 30 days (from its first sample, if later), and day by
 		 * day (UTC). Seconds: `tracked` is the time looked at, `up` the time it ran, `online` the time it was online.
-		 * Time without news (since its latest sample) counts as neither: it's down or offline, unless its samples
-		 * arrive later.
+		 * Up to its latest sample while that's recent; once it's missed two ticks, up to now: time without news counts
+		 * as neither running nor online, unless its samples arrive later.
 		 */
 		uptime(server: ServerRow, now = Math.floor(Date.now() / 1000)) {
-			if (server.first_at === null) return null;
-			const tracking = server.first_at - MINUTE;
-			const from = Math.max(now - WINDOW, tracking);
-			const spans = { up: within(server.id, 'up', from, now), online: within(server.id, 'online', from, now) };
-			const over = (start: number, end = now) => {
+			if (server.first_at === null || server.last_at === null) return null;
+			const to = now - server.last_at <= 2 * MINUTE ? Math.min(server.last_at, now) : now;
+			const from = Math.max(now - WINDOW, server.first_at - MINUTE);
+			const spans = { up: within(server.id, 'up', from, to), online: within(server.id, 'online', from, to) };
+			const over = (start: number, end = to) => {
 				const clip = (list: Span[]) => total(list.filter(([s, e]) => e > start && s < end).map(([s, e]) => [Math.max(s, start), Math.min(e, end)] as Span));
 				return { tracked: Math.max(0, end - start), up: clip(spans.up), online: clip(spans.online) };
 			};
 			const days = [];
-			for (let day = Math.floor(from / DAY) * DAY; day < now; day += DAY) days.push({ day, ...over(Math.max(day, from), Math.min(day + DAY, now)) });
+			for (let day = Math.floor(from / DAY) * DAY; day < to; day += DAY) days.push({ day, ...over(Math.max(day, from), Math.min(day + DAY, to)) });
 			return { from, year: over(from), month: over(Math.max(now - 30 * DAY, from)), days };
 		},
 	};
