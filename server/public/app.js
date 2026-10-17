@@ -25,6 +25,15 @@ function duration(seconds) {
 	return `${Math.floor(hours / 24)} days`;
 }
 
+/** Downtime, exactly: seconds under a minute, minutes and seconds under an hour, hours and minutes beyond. */
+function downtime(seconds) {
+	const s = Math.round(seconds);
+	if (s < 60) return `${s} s`;
+	if (s < 3600) return s % 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s / 60} min`;
+	const minutes = Math.floor(s / 60) % 60;
+	return minutes ? `${Math.floor(s / 3600)} h ${minutes} min` : `${Math.floor(s / 3600)} h`;
+}
+
 const dateText = (unix, options = { day: 'numeric', month: 'short', year: 'numeric' }) => new Date(unix * 1000).toLocaleDateString(undefined, { timeZone: 'UTC', ...options });
 const timeText = unix => new Date(unix * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
@@ -45,7 +54,7 @@ function dayLines(data) {
 	if (!data || !data.tracked) return ['Not tracked yet'];
 	if (data.tracked - data.online <= 0) return ['Running and online the whole time'];
 	const down = data.tracked - data.up;
-	return [down > 0 ? `Machine down for ${duration(down)}` : 'Machine running the whole time', `Offline for ${duration(data.tracked - data.online)}`];
+	return [down > 0 ? `Machine down for ${downtime(down)}` : 'Machine running the whole time', `Offline for ${downtime(data.tracked - data.online)}`];
 }
 
 /**
@@ -122,12 +131,16 @@ function yearGrid(server, now) {
 		since && since > first ? el('p', { className: 'since', textContent: `Tracked since ${dateText(since)}` }) : null);
 }
 
+/** A share of the time, with the downtime it leaves: over the year, then over 30 days. */
 function figure(label, part, whole, monthPart, monthWhole) {
+	const lost = whole - part;
+	const monthLost = monthWhole - monthPart;
 	return el('div', { className: 'figure' },
 		el('dt', { textContent: label }),
 		el('dd', {},
 			el('span', { className: 'year', textContent: showPercent(percent(part, whole)) }),
-			el('span', { className: 'month', textContent: `30 days: ${showPercent(percent(monthPart, monthWhole))}` })));
+			el('span', { className: 'total', textContent: lost > 0 ? `Down for ${downtime(lost)}` : 'No downtime' }),
+			el('span', { className: 'month' }, `30 days: ${showPercent(percent(monthPart, monthWhole))} `, monthLost > 0 ? el('span', { textContent: `(${downtime(monthLost)})` }) : null)));
 }
 
 function serverSection(server, now) {

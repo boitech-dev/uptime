@@ -11,8 +11,9 @@ and none has to be online for the others to be measured.
 
 The dashboard shows, for each server:
 
-- **Machine**: the share of the time it was running, over the last 365 days and the last 30.
-- **Machine and network**: the share of the time it was running *and* online.
+- **Machine**: the share of the time it was running, and how long it was down in total, over the last 365 days and
+  the last 30.
+- **Machine and network**: the same, for the time it was running *and* online.
 - The year as a grid, a square per day like GitHub's: pale green when it ran and was online all day, red when the
   machine was down, amber when it ran but was offline, the stronger the color the longer. Hover over a day for its
   details.
