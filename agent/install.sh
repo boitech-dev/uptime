@@ -9,6 +9,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
+# What it installs must be readable by the services' own users, whatever the caller's umask.
+umask 022
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
