@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>Uptime</title>
+	<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+	<link rel="stylesheet" href="/style.css">
+	<script type="module" src="/app.js"></script>
+</head>
+<body>
+	<header class="top">
+		<p class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 20h9l3-12 4 18 3-6h9" /></svg>Uptime</p>
+		<h1 id="headline">Loading your servers</h1>
+		<p class="lede">How long each machine ran, and how long it was also online, over the last 365 days. <span id="updated"></span></p>
+		<p class="legend"><span class="key-down">Machine down</span><span class="key-offline">Running but offline</span><span class="key-untracked">Not tracked yet</span></p>
+	</header>
+	<main id="servers"></main>
+	<section class="add" aria-labelledby="add-title">
+		<h2 id="add-title">Add a server</h2>
+		<form id="add-form">
+			<label for="add-name">Name it as it should appear here</label>
+			<div class="add-row">
+				<input id="add-name" name="name" required maxlength="80" autocomplete="off" spellcheck="false" placeholder="web-1">
+				<button type="submit">Add server</button>
+			</div>
+			<p id="add-error" class="add-error" role="alert" hidden></p>
+		</form>
+		<div id="add-result" hidden>
+			<p>Run this as root on <strong id="add-server"></strong>. It installs the agent, which reports every minute. The command holds the server’s token, so it’s shown only this once.</p>
+			<pre><code id="add-command"></code></pre>
+			<button id="add-copy" type="button">Copy command</button>
+		</div>
+	</section>
+	<div id="tip" class="tip" role="tooltip" hidden></div>
+	<footer class="foot">
+		<p>Uptime is free software under the GNU AGPLv3. <a href="https://github.com/boitech-dev/uptime">Get the source code</a></p>
+	</footer>
+</body>
+</html>

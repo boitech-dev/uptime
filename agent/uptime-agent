@@ -1,0 +1,47 @@
+#!/bin/sh
+# Uptime agent. Run once a minute (by its systemd timer): records whether this machine is running and online,
+# then sends the dashboard what it doesn't have yet. Samples wait in the outbox for as long as the dashboard
+# can't be reached, so nothing is lost while this server, or the dashboard's, is cut off.
+#
+# A sample is one line: "<unix time> <boot time> <1 online | 0 offline>". Online means one of the hosts
+# answered a ping.
+#
+# Settings, in /etc/uptime-agent.conf (or the file UPTIME_CONF names):
+#   UPTIME_URL    the dashboard, e.g. https://uptime.example.com
+#   UPTIME_TOKEN  this server's token (from `uptimectl add <name>` on the dashboard)
+#   UPTIME_HOSTS  optional: the hosts to ping, default "8.8.8.8 1.1.1.1 9.9.9.9 google.com"
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+set -eu
+
+CONF=${UPTIME_CONF:-/etc/uptime-agent.conf}
+if [ -r "$CONF" ]; then . "$CONF"; fi
+: "${UPTIME_URL:?is not set (see $CONF)}"
+: "${UPTIME_TOKEN:?is not set (see $CONF)}"
+HOSTS=${UPTIME_HOSTS:-8.8.8.8 1.1.1.1 9.9.9.9 google.com}
+STATE=${UPTIME_STATE:-${STATE_DIRECTORY:-/var/lib/uptime-agent}}
+BATCH=10000
+
+now=$(date +%s)
+boot=$(awk '/^btime/ { print $2 }' /proc/stat)
+
+online=0
+for host in $HOSTS; do
+	if ping -n -q -c 1 -W 2 "$host" >/dev/null 2>&1; then
+		online=1
+		break
+	fi
+done
+
+echo "$now $boot $online" >>"$STATE/outbox"
+
+# Oldest samples first; dropped once the dashboard has them. Ticks never overlap (a systemd oneshot), so nothing
+# writes to the outbox meanwhile. The token goes through stdin, not the command line other users can read.
+# shortcut: while the dashboard is unreachable the outbox grows ~13 MB a year; cap it if a server can stay cut off that long.
+head -n "$BATCH" "$STATE/outbox" >"$STATE/batch"
+if printf 'header = "Authorization: Bearer %s"\n' "$UPTIME_TOKEN" |
+	curl --config - -fsS --max-time 30 -H 'Content-Type: text/plain' --data-binary "@$STATE/batch" "$UPTIME_URL/api/report" >/dev/null; then
+	tail -n "+$((BATCH + 1))" "$STATE/outbox" >"$STATE/outbox.new"
+	mv "$STATE/outbox.new" "$STATE/outbox"
+fi
+rm -f "$STATE/batch"
