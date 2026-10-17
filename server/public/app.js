@@ -11,11 +11,6 @@ const el = (tag, props = {}, ...children) => {
 	node.append(...children.filter(c => c !== null && c !== undefined && c !== false));
 	return node;
 };
-const svgEl = (tag, attrs = {}) => {
-	const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-	for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
-	return node;
-};
 
 /** Floored, so 99.9996 % never shows as 100 %. */
 const percent = (part, whole) => (whole > 0 ? Math.floor((100_000 * part) / whole) / 1000 : null);
@@ -41,75 +36,90 @@ function stateOf(server, now) {
 	return server.lastOnline ? { key: 'online', label: 'Online', detail: latest } : { key: 'offline', label: 'Running, offline', detail: latest };
 }
 
-/** A spike's height for a day's downtime: a minute shows, a whole day reaches the top. */
-const spike = seconds => (seconds <= 0 ? 0 : 6 + 34 * Math.min(1, Math.log1p(seconds / 60) / Math.log1p(1440)));
+/** How strongly a day with downtime is shaded: a minute shows, a whole day is solid. */
+const depth = seconds => Math.round(30 + 70 * Math.min(1, Math.log1p(seconds / 60) / Math.log1p(1440)));
+const WEEKDAYS = ['Mon', '', 'Wed', '', 'Fri', '', ''];
 
-/** The year as a seismograph: a flat line on calm days, a spike where the machine was down (red) or offline (amber). */
-function trace(server, now) {
-	const first = Math.floor(now / DAY) * DAY - (DAYS - 1) * DAY;
+/** What a day's tooltip says. */
+function dayLines(data) {
+	if (!data || !data.tracked) return ['Not tracked yet'];
+	if (data.tracked - data.online <= 0) return ['Running and online the whole time'];
+	const down = data.tracked - data.up;
+	return [down > 0 ? `Machine down for ${duration(down)}` : 'Machine running the whole time', `Offline for ${duration(data.tracked - data.online)}`];
+}
+
+/**
+ * The year as a grid, like GitHub's: a column per week (Monday first), a square per day. Calm days are pale green;
+ * a day with downtime is red if the machine was down, amber if it ran but was offline, the more opaque the longer.
+ */
+function yearGrid(server, now) {
+	const today = Math.floor(now / DAY) * DAY;
+	const first = today - (DAYS - 1) * DAY;
+	const start = first - ((first / DAY + 3) % 7) * DAY; // the Monday before (1970-01-01 was a Thursday)
+	const weeks = Math.floor((today - start) / DAY / 7) + 1;
 	const byDay = new Map((server.uptime?.days ?? []).map(d => [d.day, d]));
-	const days = Array.from({ length: DAYS }, (_, i) => ({ day: first + i * DAY, data: byDay.get(first + i * DAY) }));
-	const base = 46;
-	const svg = svgEl('svg', { viewBox: `0 0 ${DAYS} 48`, preserveAspectRatio: 'none', role: 'img' });
-	let offline = '';
-	let down = '';
-	// The baseline in stretches, so a dotted one keeps its rhythm: dotted while not tracked, solid after.
-	const runs = [];
-	days.forEach(({ data }, i) => {
-		const kind = data?.tracked ? 'baseline' : 'untracked';
-		if (runs.at(-1)?.kind === kind) runs.at(-1).end = i + 1;
-		else runs.push({ kind, start: i, end: i + 1 });
-		if (kind === 'untracked') return;
-		const x = i + 0.5;
-		const off = spike(data.tracked - data.online);
-		const dn = spike(data.tracked - data.up);
-		if (off) offline += `M${x} ${base}V${base - off}`;
-		if (dn) down += `M${x} ${base}V${base - dn}`;
-	});
-	const line = kind => runs.filter(r => r.kind === kind).map(r => `M${r.start} ${base}H${r.end}`).join('');
-	for (const [d, cls] of [[line('untracked'), 'untracked'], [line('baseline'), 'baseline'], [offline, 'spike-offline'], [down, 'spike-down']]) {
-		if (d) svg.append(svgEl('path', { d, class: cls, 'vector-effect': 'non-scaling-stroke', fill: 'none' }));
-	}
-	const cursor = svgEl('line', { class: 'cursor', y1: 0, y2: base, 'vector-effect': 'non-scaling-stroke', visibility: 'hidden' });
-	svg.append(cursor);
 
-	const bad = days.filter(d => d.data && d.data.tracked - d.data.online > 0);
-	svg.setAttribute('aria-label', bad.length ? `Over the last ${DAYS} days, ${bad.length} days with downtime or time offline.` : `No downtime and no time offline over the time tracked.`);
+	const days = el('div', { className: 'days', role: 'img' });
+	const months = el('div', { className: 'months', ariaHidden: 'true' });
+	days.style.setProperty('--weeks', weeks);
+	months.style.setProperty('--weeks', weeks);
+	let bad = 0;
+	for (let day = start; day <= today; day += DAY) {
+		const cell = el('span', { className: 'day' });
+		cell.dataset.day = day;
+		const data = byDay.get(day);
+		if (day < first) cell.classList.add('outside');
+		else if (!data?.tracked) cell.classList.add('untracked');
+		else if (data.tracked - data.online > 0) {
+			bad++;
+			cell.classList.add(data.tracked - data.up > 0 ? 'down' : 'offline');
+			cell.style.setProperty('--depth', `${depth(data.tracked - data.online)}%`);
+		} else cell.classList.add('calm');
+		days.append(cell);
+	}
+	// A month's name over the first week that starts in it.
+	for (let week = 1; week < weeks; week++) {
+		const monday = start + week * 7 * DAY;
+		if (new Date(monday * 1000).getUTCMonth() === new Date((monday - 7 * DAY) * 1000).getUTCMonth()) continue;
+		const label = el('span', { textContent: dateText(monday, { month: 'short' }) });
+		label.style.gridColumn = `${week + 1} / span 4`;
+		months.append(label);
+	}
+	days.setAttribute('aria-label', bad ? `Over the last ${DAYS} days, ${bad} days with downtime or time offline.` : 'No downtime and no time offline over the time tracked.');
 
 	const tip = document.getElementById('tip');
+	let shown = null;
 	const show = event => {
-		const box = svg.getBoundingClientRect();
-		const i = Math.min(DAYS - 1, Math.max(0, Math.floor(((event.clientX - box.left) / box.width) * DAYS)));
-		const { day, data } = days[i];
-		cursor.setAttribute('x1', i + 0.5);
-		cursor.setAttribute('x2', i + 0.5);
-		cursor.setAttribute('visibility', 'visible');
-		const lines = !data || !data.tracked
-			? ['Not tracked yet']
-			: data.tracked - data.online <= 0
-				? ['Running and online the whole time']
-				: [data.tracked - data.up > 0 ? `Machine down for ${duration(data.tracked - data.up)}` : 'Machine running the whole time', `Offline for ${duration(data.tracked - data.online)}`];
-		tip.replaceChildren(el('strong', { textContent: dateText(day, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) }), ...lines.map(l => el('div', { textContent: l })));
+		const cell = event.target.closest('.day:not(.outside)');
+		if (!cell || cell === shown) return;
+		shown?.classList.remove('hover');
+		shown = cell;
+		cell.classList.add('hover');
+		const day = Number(cell.dataset.day);
+		tip.replaceChildren(el('strong', { textContent: dateText(day, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) }), ...dayLines(byDay.get(day)).map(l => el('div', { textContent: l })));
 		tip.hidden = false;
-		const x = Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, event.clientX - tip.offsetWidth / 2));
-		tip.style.left = `${x}px`;
+		const box = cell.getBoundingClientRect();
+		tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, box.left + box.width / 2 - tip.offsetWidth / 2))}px`;
 		tip.style.top = `${box.top - tip.offsetHeight - 8}px`;
 	};
 	const hide = () => {
+		shown?.classList.remove('hover');
+		shown = null;
 		tip.hidden = true;
-		cursor.setAttribute('visibility', 'hidden');
 	};
-	svg.addEventListener('pointermove', show);
-	svg.addEventListener('pointerdown', show);
-	svg.addEventListener('pointerleave', hide);
+	days.addEventListener('pointerover', show);
+	days.addEventListener('pointerdown', show);
+	days.addEventListener('pointerleave', hide);
 
+	// Narrow screens scroll the weeks sideways, starting from today.
+	const scroller = el('div', { className: 'weeks' }, months, days);
+	scroller.addEventListener('scroll', hide, { passive: true });
+	requestAnimationFrame(() => (scroller.scrollLeft = scroller.scrollWidth));
 	const since = server.uptime?.from;
-	return el('div', { className: 'trace' },
-		svg,
-		el('div', { className: 'axis' },
-			el('span', { textContent: dateText(first) }),
-			since && since > first ? el('span', { textContent: `Tracked since ${dateText(since)}` }) : null,
-			el('span', { textContent: 'Today' })));
+	return el('div', { className: 'calendar' },
+		el('div', { className: 'weekdays', ariaHidden: 'true' }, ...WEEKDAYS.map(d => el('span', { textContent: d }))),
+		scroller,
+		since && since > first ? el('p', { className: 'since', textContent: `Tracked since ${dateText(since)}` }) : null);
 }
 
 function figure(label, part, whole, monthPart, monthWhole) {
@@ -132,7 +142,7 @@ function serverSection(server, now) {
 				figure('Machine', u.year.up, u.year.tracked, u.month.up, u.month.tracked),
 				figure('Machine and network', u.year.online, u.year.tracked, u.month.online, u.month.tracked))
 			: null,
-		trace(server, now));
+		yearGrid(server, now));
 }
 
 function headline(servers, now) {

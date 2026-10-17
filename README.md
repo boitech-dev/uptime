@@ -2,7 +2,7 @@
 
 Machine and network uptime for any number of Linux servers, on a dashboard you host.
 
-![The dashboard: three servers, their uptime over the year and over 30 days, and a timeline of the year](docs/screenshot.png)
+![The dashboard: three servers, their uptime over the year and over 30 days, and a grid of the year's days](docs/screenshot.png)
 
 Every minute, each server checks two things about itself: that it's running, and that it's online (one of several
 hosts answers a ping). It keeps what it finds until the dashboard has it, so a server cut off from the internet, or a
@@ -13,8 +13,9 @@ The dashboard shows, for each server:
 
 - **Machine**: the share of the time it was running, over the last 365 days and the last 30.
 - **Machine and network**: the share of the time it was running *and* online.
-- The year as a timeline: a flat line on calm days, a spike on the days it was down (red) or running but offline
-  (amber), the taller the longer. Hover over a day for its details.
+- The year as a grid, a square per day like GitHub's: pale green when it ran and was online all day, red when the
+  machine was down, amber when it ran but was offline, the stronger the color the longer. Hover over a day for its
+  details.
 
 History is kept for two years. Uptime counts from a server's first sample; until then it shows as not tracked yet.
 
