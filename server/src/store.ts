@@ -118,7 +118,7 @@ export function openStore(path: string) {
 		},
 		rename: (name: string, to: string) => db.prepare('UPDATE servers SET name = ? WHERE name = ?').run(to, name).changes > 0,
 		remove: (name: string) => db.prepare('DELETE FROM servers WHERE name = ?').run(name).changes > 0,
-		servers: () => db.prepare('SELECT id, name, created_at, first_at, last_at, last_online FROM servers ORDER BY name').all() as ServerRow[],
+		servers: () => db.prepare('SELECT id, name, created_at, first_at, last_at, last_online FROM servers ORDER BY name COLLATE NOCASE').all() as ServerRow[],
 		serverByToken: (token: string) => db.prepare('SELECT id, name FROM servers WHERE token_hash = ?').get(hashToken(token)) as { id: number; name: string } | undefined,
 
 		/** Stores an agent's samples. Sending the same ones twice changes nothing. */
