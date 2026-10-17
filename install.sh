@@ -73,7 +73,6 @@ exec runuser -u uptime -- $NODE $DIR/app/server/src/cli.ts "\$@"
 EOF
 chmod 0755 /usr/local/bin/uptimectl
 
-PASSWORD=""
 if [ ! -f "$ENV" ]; then
 	say "Creating the login"
 	PASSWORD=$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')
@@ -87,6 +86,10 @@ UPTIME_PASSWORD_HASH=$HASH
 EOF
 	)
 	chgrp uptime "$ENV"
+	# Shown now, the moment it exists, so that nothing failing further on can lose it.
+	echo "The dashboard's login, shown only this once (save it in your password manager):"
+	echo "  user: $LOGIN"
+	echo "  password: $PASSWORD"
 fi
 
 cat >/etc/systemd/system/uptime.service <<EOF
@@ -131,10 +134,5 @@ curl -fs "http://127.0.0.1:$UPTIME_PORT/health" >/dev/null || die "the dashboard
 say "Uptime runs on 127.0.0.1:$UPTIME_PORT"
 echo "Serve $UPTIME_URL from it through an HTTPS proxy that keeps the Host header, e.g. with Caddy:"
 echo "  ${UPTIME_URL#https://} { reverse_proxy 127.0.0.1:$UPTIME_PORT }"
-if [ -n "$PASSWORD" ]; then
-	echo
-	echo "Sign in as \"$UPTIME_USER\" with this password (shown only now; save it in your password manager):"
-	echo "  $PASSWORD"
-fi
 echo
 echo "Then add your servers on the dashboard: it gives each one its install command."
