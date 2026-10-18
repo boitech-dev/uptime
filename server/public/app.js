@@ -213,8 +213,7 @@ function serviceCard(service, servers, now) {
 	});
 	const edit = el('button', { type: 'button', className: 'link-button', textContent: 'Edit' });
 	edit.addEventListener('click', () => openEditor(service));
-	const handle = el('button', { type: 'button', className: 'handle', ariaLabel: `Move ${service.name}: drag it, or use the arrow keys` });
-	handle.innerHTML = '<svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/></svg>';
+	const handle = handleFor(`Move ${service.name}: drag it, or use the arrow keys`);
 	const card = el('article', { className: `card ${state.key}` },
 		el('div', { className: 'card-head' }, el('span', { className: 'dot' }), el('h3', { textContent: service.name }), handle),
 		el('p', { className: 'address', textContent: service.url, title: service.expect ? `${service.url}, answering “${service.expect}”` : service.url }),
@@ -225,12 +224,24 @@ function serviceCard(service, servers, now) {
 		monthStrip(service, now),
 		el('div', { className: 'card-foot' }, el('span', { textContent: `Runs on ${service.server}` }), el('span', { className: 'actions' }, edit, remove)));
 	card.dataset.id = service.id;
-	handle.addEventListener('pointerdown', event => drag(event, card));
-	handle.addEventListener('keydown', event => nudge(event, card, handle));
+	handle.addEventListener('pointerdown', event => drag(event, card, '#services .card'));
+	handle.addEventListener('keydown', event => nudge(event, card, '#services .card[data-id]', '.card-head .handle'));
 	return card;
 }
 
-/** The services under their groups' headings: groups in the order of their first card, ungrouped ones too. */
+const GRIP = '<svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/></svg>';
+
+/** A drag handle: what it moves, and how its arrow keys move it. */
+function handleFor(label) {
+	const handle = el('button', { type: 'button', className: 'handle', ariaLabel: label });
+	handle.innerHTML = GRIP;
+	return handle;
+}
+
+/**
+ * The services under their groups' headings: groups in the order of their first card. Once there are groups, the
+ * services without one get a heading too, so that they can move like a group.
+ */
 function serviceGroups(services, servers, now) {
 	const groups = [];
 	for (const service of services) {
@@ -239,19 +250,26 @@ function serviceGroups(services, servers, now) {
 		if (!group) groups.push((group = { name, cards: [] }));
 		group.cards.push(serviceCard(service, servers, now));
 	}
+	const named = groups.some(g => g.name);
 	return groups.map(g => {
-		const section = el('div', { className: 'group' }, g.name ? el('h3', { className: 'group-title', textContent: g.name }) : null, el('div', { className: 'cards' }, ...g.cards));
+		const title = g.name || 'Without a group';
+		const handle = named ? handleFor(`Move the group ${title}: drag it, or use the arrow keys`) : null;
+		const section = el('div', { className: 'group' },
+			named ? el('div', { className: 'group-head' }, el('h3', { className: `group-title${g.name ? '' : ' muted'}`, textContent: title }), handle) : null,
+			el('div', { className: 'cards' }, ...g.cards));
 		section.dataset.group = g.name;
+		handle?.addEventListener('pointerdown', event => drag(event, section, '#services .group', true));
+		handle?.addEventListener('keydown', event => nudge(event, section, '#services .group', '.group-head .handle'));
 		return section;
 	});
 }
 
 // --- arranging -------------------------------------------------------------------------------------------------
 
-/** True while a card is dragged or the editor is open: the minute's refresh waits. */
+/** True while something is dragged or the editor is open: the minute's refresh waits. */
 let busy = false;
 
-/** Saves the cards' order as it is on the page, each under the group it sits in, then shows it as saved. */
+/** Saves the order on the page (groups, then the cards in each, under their group), then shows it as saved. */
 async function saveOrder() {
 	const order = [...document.querySelectorAll('#services .group')].flatMap(group =>
 		[...group.querySelectorAll('.card[data-id]')].map(card => ({ id: Number(card.dataset.id), group: group.dataset.group })));
@@ -260,32 +278,36 @@ async function saveOrder() {
 	await load();
 }
 
-/** Drags a card by its handle (mouse or touch): it drops before or after the card under the pointer, in that group. */
-function drag(event, card) {
+/**
+ * Drags `item` (a card, or a whole group) by its handle, with a mouse or a finger: it drops before or after the
+ * item of the same kind (`selector`) under the pointer, by halves: left and right for cards, top and bottom for groups.
+ */
+function drag(event, item, selector, vertical = false) {
 	if (event.button !== 0) return;
 	event.preventDefault();
 	busy = true;
-	const box = card.getBoundingClientRect();
+	const box = item.getBoundingClientRect();
 	const [dx, dy] = [event.clientX - box.left, event.clientY - box.top];
-	const placeholder = el('div', { className: 'card placeholder' });
+	const placeholder = el('div', { className: `${item.className} placeholder` });
 	placeholder.style.height = `${box.height}px`;
-	card.before(placeholder);
-	card.classList.add('dragging');
-	Object.assign(card.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px` });
+	item.before(placeholder);
+	item.classList.add('dragging');
+	Object.assign(item.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px` });
 	const move = e => {
-		card.style.left = `${e.clientX - dx}px`;
-		card.style.top = `${e.clientY - dy}px`;
-		const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('#services .card:not(.placeholder):not(.dragging)');
+		item.style.left = `${e.clientX - dx}px`;
+		item.style.top = `${e.clientY - dy}px`;
+		const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(`${selector}:not(.placeholder):not(.dragging)`);
 		if (target) {
 			const t = target.getBoundingClientRect();
-			target[e.clientX < t.left + t.width / 2 ? 'before' : 'after'](placeholder);
+			const before = vertical ? e.clientY < t.top + t.height / 2 : e.clientX < t.left + t.width / 2;
+			target[before ? 'before' : 'after'](placeholder);
 		}
 	};
 	const drop = () => {
 		window.removeEventListener('pointermove', move);
-		placeholder.replaceWith(card);
-		card.classList.remove('dragging');
-		card.removeAttribute('style');
+		placeholder.replaceWith(item);
+		item.classList.remove('dragging');
+		item.removeAttribute('style');
 		busy = false;
 		saveOrder();
 	};
@@ -294,17 +316,17 @@ function drag(event, card) {
 	window.addEventListener('pointercancel', drop, { once: true });
 }
 
-/** The arrow keys move a card one place earlier or later, across groups too. */
-function nudge(event, card, handle) {
+/** The arrow keys move an item one place earlier or later among those of its kind (cards: across groups too). */
+function nudge(event, item, selector, handleSelector) {
 	const step = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[event.key];
 	if (!step) return;
 	event.preventDefault();
-	const cards = [...document.querySelectorAll('#services .card[data-id]')];
-	const other = cards[cards.indexOf(card) + step];
+	const items = [...document.querySelectorAll(selector)];
+	const other = items[items.indexOf(item) + step];
 	if (!other) return;
-	other[step < 0 ? 'before' : 'after'](card);
-	handle.focus();
-	saveOrder().then(() => document.querySelector(`#services .card[data-id="${card.dataset.id}"] .handle`)?.focus());
+	other[step < 0 ? 'before' : 'after'](item);
+	const key = item.dataset.id ? `[data-id="${item.dataset.id}"]` : `[data-group="${CSS.escape(item.dataset.group)}"]`;
+	saveOrder().then(() => document.querySelector(`${selector}${key} ${handleSelector}`)?.focus());
 }
 
 /** The editor: name, address, expected text and group. */

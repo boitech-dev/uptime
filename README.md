@@ -93,7 +93,8 @@ server, so `127.0.0.1` reaches a service that only listens locally. A service is
 | `tcp://127.0.0.1:3306` | it accepts the connection, and sends the text in its first seconds if one is given (`MariaDB` in a MariaDB greeting, `220` in a mail server's banner) |
 
 Cards can sit under group headings ("Git", "Mail"…): give a service a group when you add or edit it. Drag a card by
-its handle to reorder it, or into another group (with the handle focused, the arrow keys move it too). Each card's
+its handle to reorder it, or into another group, and a group by the handle next to its heading to reorder the groups
+(the services without one move together, under "Without a group"); with a handle focused, the arrow keys move it too. Each card's
 **Edit** changes its name, address, expected text or group (not its server: add it on the other one instead), and
 **Remove** removes the service and its history.
 

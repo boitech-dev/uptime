@@ -109,9 +109,14 @@ code { font-size: 0.9em; padding: 0.1em 0.35em; border-radius: 4px; background: 
 .card.dragging { position: fixed; z-index: 2; margin: 0; background: var(--paper); box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent); pointer-events: none; }
 .card.placeholder { border: 1.5px dashed var(--trace); background: color-mix(in srgb, var(--trace) 8%, transparent); }
 .card-foot .actions { display: flex; gap: 0.875rem; }
-.group-title { margin: 1.5rem 0 0; font-size: 1rem; font-weight: 650; }
+.group-head { display: flex; align-items: center; gap: 0.375rem; margin-top: 1.5rem; }
+.group:first-child .group-head { margin-top: 0; }
+.group-title { margin: 0; font-size: 1rem; font-weight: 650; }
+.group-title.muted { color: var(--muted); font-weight: 600; }
+.group-head .handle { margin: 0; }
 .group .cards { margin-top: 0.75rem; }
-.group:first-child .group-title { margin-top: 0; }
+.group.dragging { position: fixed; z-index: 2; padding: 0.75rem; border-radius: 10px; background: var(--paper); box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent); pointer-events: none; }
+.group.placeholder { border: 1.5px dashed var(--trace); border-radius: 10px; background: color-mix(in srgb, var(--trace) 8%, transparent); }
 .dialog { width: min(34rem, calc(100vw - 32px)); padding: 1.5rem; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); color: var(--ink); }
 .dialog::backdrop { background: color-mix(in srgb, #000 40%, transparent); }
 .dialog h2 { margin: 0; font-size: 1.25rem; font-weight: 650; }
