@@ -92,7 +92,10 @@ server, so `127.0.0.1` reaches a service that only listens locally. A service is
 | `wss://example.com/v1/ws` | it accepts the WebSocket (101 Switching Protocols) |
 | `tcp://127.0.0.1:3306` | it accepts the connection, and sends the text in its first seconds if one is given (`MariaDB` in a MariaDB greeting, `220` in a mail server's banner) |
 
-Each card's **Remove** removes the service and its history.
+Cards can sit under group headings ("Git", "Mail"…): give a service a group when you add or edit it. Drag a card by
+its handle to reorder it, or into another group (with the handle focused, the arrow keys move it too). Each card's
+**Edit** changes its name, address, expected text or group (not its server: add it on the other one instead), and
+**Remove** removes the service and its history.
 
 ## Update an agent
 

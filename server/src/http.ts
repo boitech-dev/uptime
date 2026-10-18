@@ -6,6 +6,8 @@
  *   GET  /api/servers         every server's and service's uptime, for the dashboard page (password)
  *   POST /api/servers         adds a server: answers the one-line command that installs its agent (password)
  *   POST /api/services        adds a service to the server it runs on (password)
+ *   PATCH /api/services/<id>  renames a service, changes its address, expected text or group (password)
+ *   PUT  /api/services/order  puts the services in an order, each under its group (password)
  *   DELETE /api/services/<id> removes a service and its history (password)
  *   GET  /agent/install.sh, /agent/uptime-agent    the agent, to install it (public: it's free software)
  *   GET  /health              for monitoring
@@ -15,7 +17,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
-import { parseReport, serviceProblem, type Store } from './store.ts';
+import { parseReport, serviceProblem, type ServiceEdit, type Store } from './store.ts';
 
 const ROOT = new URL('../..', import.meta.url).pathname;
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.sh': 'text/plain; charset=utf-8', '': 'text/plain; charset=utf-8' };
@@ -101,7 +103,7 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 	async function fromPage(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
 		const origin = req.headers.origin;
 		const json = (req.headers['content-type'] ?? '').startsWith('application/json');
-		if ((req.method === 'POST' && !json) || (origin && URL.parse(origin)?.host !== req.headers.host)) {
+		if ((req.method !== 'DELETE' && !json) || (origin && URL.parse(origin)?.host !== req.headers.host)) {
 			send(res, 403, 'Make changes from the dashboard.');
 			return null;
 		}
@@ -133,16 +135,45 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 		send(res, 201, JSON.stringify({ name, command: installCommand(url ?? `https://${req.headers.host}`, token) }), { 'content-type': 'application/json' });
 	}
 
+	const GROUP = 'A group name is up to 60 characters.';
+	const NAME = 'Give the service a name, up to 80 characters.';
+
 	async function addService(req: IncomingMessage, res: ServerResponse) {
 		const body = await fromPage(req, res);
 		if (!body) return;
-		const [name, server, address, expect] = [text(body.name), text(body.server), text(body.url), text(body.expect)];
-		if (!name || name.length > 80) return send(res, 400, 'Give the service a name, up to 80 characters.');
+		const [name, server, address, expect, group] = [text(body.name), text(body.server), text(body.url), text(body.expect), text(body.group)];
+		if (!name || name.length > 80) return send(res, 400, NAME);
+		if (group.length > 60) return send(res, 400, GROUP);
 		const problem = serviceProblem(address, expect);
 		if (problem) return send(res, 400, problem);
-		const id = store.addService({ name, server, url: address, expect });
+		const id = store.addService({ name, server, url: address, expect, group });
 		if (id === null) return send(res, 400, 'Choose the server it runs on.');
 		send(res, 201, JSON.stringify({ id }), { 'content-type': 'application/json' });
+	}
+
+	async function editService(req: IncomingMessage, res: ServerResponse, id: number) {
+		const body = await fromPage(req, res);
+		if (!body) return;
+		const current = store.services().find(s => s.id === id);
+		if (!current) return send(res, 404, 'This service doesn’t exist anymore.');
+		const edit: ServiceEdit = {};
+		for (const field of ['name', 'url', 'expect', 'group'] as const) if (typeof body[field] === 'string') edit[field] = text(body[field]);
+		if (edit.name !== undefined && (!edit.name || edit.name.length > 80)) return send(res, 400, NAME);
+		if ((edit.group?.length ?? 0) > 60) return send(res, 400, GROUP);
+		const problem = serviceProblem(edit.url ?? current.url, edit.expect ?? current.expect ?? '');
+		if (problem) return send(res, 400, problem);
+		store.editService(id, edit);
+		send(res, 204, '');
+	}
+
+	async function arrange(req: IncomingMessage, res: ServerResponse) {
+		const body = await fromPage(req, res);
+		if (!body) return;
+		const order = Array.isArray(body.order) ? body.order : null;
+		const valid = order?.every(o => o && Number.isInteger(o.id) && typeof o.group === 'string' && o.group.trim().length <= 60);
+		if (!order || !valid || order.length > 10_000) return send(res, 400, 'Send the order as a list of { id, group }.');
+		store.arrange(order.map(o => ({ id: o.id, group: o.group.trim() })));
+		send(res, 204, '');
 	}
 
 	async function removeService(req: IncomingMessage, res: ServerResponse, id: number) {
@@ -157,7 +188,7 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 			uptime: store.uptime(s, now),
 		}));
 		const services = store.services().map(s => ({
-			id: s.id, name: s.name, server: s.server, url: s.url, expect: s.expect, lastAt: s.last_at, lastOk: s.last_ok === null ? null : s.last_ok === 1,
+			id: s.id, name: s.name, server: s.server, url: s.url, expect: s.expect, group: s.group_name, lastAt: s.last_at, lastOk: s.last_ok === null ? null : s.last_ok === 1,
 			lastMs: s.last_ms, uptime: store.serviceUptime(s, now),
 		}));
 		send(res, 200, JSON.stringify({ now, servers: list, services }), { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -173,8 +204,10 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 			}
 			if (req.method === 'POST' && path === '/api/servers') return authorized(req, res) ? await addServer(req, res) : undefined;
 			if (req.method === 'POST' && path === '/api/services') return authorized(req, res) ? await addService(req, res) : undefined;
+			if (req.method === 'PUT' && path === '/api/services/order') return authorized(req, res) ? await arrange(req, res) : undefined;
 			const serviceId = /^\/api\/services\/(\d{1,9})$/.exec(path)?.[1];
 			if (req.method === 'DELETE' && serviceId) return authorized(req, res) ? await removeService(req, res, Number(serviceId)) : undefined;
+			if (req.method === 'PATCH' && serviceId) return authorized(req, res) ? await editService(req, res, Number(serviceId)) : undefined;
 			if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed.');
 			if (path === '/health') return send(res, 200, 'ok');
 			if (AGENT[path]) return file(res, AGENT[path]);

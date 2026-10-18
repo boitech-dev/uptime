@@ -77,6 +77,20 @@ describe('the dashboard', () => {
 		assert.deepEqual([mariadb.name, mariadb.server, mariadb.lastOk, mariadb.lastMs], ['MariaDB', 'db-host', true, 4]);
 		assert.equal(mariadb.uptime.year.up, mariadb.uptime.year.tracked);
 
+		// Renamed, into a group, in another order.
+		const patch = (body: unknown, headers: Record<string, string> = {}) =>
+			fetch(`${base}/api/services/${id}`, { method: 'PATCH', headers: { ...login, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+		assert.equal((await patch({ name: '' })).status, 400);
+		assert.equal((await patch({ url: 'nope' })).status, 400);
+		assert.equal((await patch({ name: 'x' }, { origin: 'https://elsewhere.test' })).status, 403);
+		assert.equal((await patch({ name: 'MariaDB (db-host)', group: 'Databases' })).status, 204);
+		assert.equal((await fetch(`${base}/api/services/999999`, { method: 'PATCH', headers: { ...login, 'content-type': 'application/json' }, body: '{}' })).status, 404);
+		const order = (body: unknown) => fetch(`${base}/api/services/order`, { method: 'PUT', headers: { ...login, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+		assert.equal((await order({ order: [{ id: 'x' }] })).status, 400);
+		assert.equal((await order({ order: [{ id, group: 'Data' }] })).status, 204);
+		const renamed = ((await (await fetch(`${base}/api/servers`, { headers: login })).json()) as { services: { id: number; name: string; group: string }[] }).services[0];
+		assert.deepEqual([renamed.id, renamed.name, renamed.group], [id, 'MariaDB (db-host)', 'Data']);
+
 		const remove = (headers: Record<string, string> = {}) => fetch(`${base}/api/services/${id}`, { method: 'DELETE', headers: { ...login, ...headers } });
 		assert.equal((await remove({ origin: 'https://elsewhere.test' })).status, 403);
 		assert.equal((await fetch(`${base}/api/services/${id}`, { method: 'DELETE' })).status, 401);

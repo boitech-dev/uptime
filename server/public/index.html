@@ -22,8 +22,8 @@
 			<h2 id="services-title">Services</h2>
 			<p id="services-summary" class="services-summary"></p>
 		</div>
-		<p class="services-lede">Each service is checked every minute by the server it runs on, and counts as up only while that server is online.</p>
-		<div id="services" class="cards"></div>
+		<p class="services-lede">Each service is checked every minute by the server it runs on, and counts as up only while that server is online. Drag a card by its handle to reorder it, or into another group.</p>
+		<div id="services"></div>
 		<details class="add-service">
 			<summary>Add a service</summary>
 			<form id="service-form" class="service-form">
@@ -31,6 +31,7 @@
 				<label>Address <input name="url" required maxlength="500" autocomplete="off" spellcheck="false" placeholder="https://git.example.com/api/healthz"></label>
 				<p class="hint">An <code>http(s)://</code> address must answer with a status under 400, a <code>ws(s)://</code> one must accept the WebSocket, a <code>tcp://host:port</code> one must accept the connection.</p>
 				<label>Text it must answer, if any <input name="expect" maxlength="200" autocomplete="off" spellcheck="false" placeholder="pass"></label>
+				<label>Group, if any <input name="group" maxlength="60" autocomplete="off" list="groups" placeholder="Git"></label>
 				<label>Runs on <select name="server" id="service-server" required></select></label>
 				<p class="hint">That server checks it, so a <code>127.0.0.1</code> address reaches the service on it.</p>
 				<div><button type="submit">Add service</button></div>
@@ -38,6 +39,19 @@
 			</form>
 		</details>
 	</section>
+	<datalist id="groups"></datalist>
+	<dialog id="service-dialog" class="dialog" aria-labelledby="edit-title">
+		<form id="edit-form" class="service-form">
+			<h2 id="edit-title">Edit the service</h2>
+			<label>Name <input name="name" required maxlength="80" autocomplete="off"></label>
+			<label>Address <input name="url" required maxlength="500" autocomplete="off" spellcheck="false"></label>
+			<label>Text it must answer, if any <input name="expect" maxlength="200" autocomplete="off" spellcheck="false"></label>
+			<label>Group, if any <input name="group" maxlength="60" autocomplete="off" list="groups"></label>
+			<p class="hint">It runs on <strong id="edit-server"></strong>, which checks it: to move it to another server, add it there and remove this one.</p>
+			<p id="edit-error" class="add-error" role="alert" hidden></p>
+			<div class="dialog-actions"><button type="submit">Save</button><button type="button" id="edit-cancel" class="secondary">Cancel</button></div>
+		</form>
+	</dialog>
 	<section class="add" aria-labelledby="add-title">
 		<h2 id="add-title">Add a server</h2>
 		<form id="add-form">

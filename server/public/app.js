@@ -211,15 +211,115 @@ function serviceCard(service, servers, now) {
 		if (!response?.ok) alert(response ? await response.text() : 'The dashboard can’t be reached. Check your connection and try again.');
 		load();
 	});
-	return el('article', { className: `card ${state.key}` },
-		el('div', { className: 'card-head' }, el('span', { className: 'dot' }), el('h3', { textContent: service.name })),
+	const edit = el('button', { type: 'button', className: 'link-button', textContent: 'Edit' });
+	edit.addEventListener('click', () => openEditor(service));
+	const handle = el('button', { type: 'button', className: 'handle', ariaLabel: `Move ${service.name}: drag it, or use the arrow keys` });
+	handle.innerHTML = '<svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/></svg>';
+	const card = el('article', { className: `card ${state.key}` },
+		el('div', { className: 'card-head' }, el('span', { className: 'dot' }), el('h3', { textContent: service.name }), handle),
 		el('p', { className: 'address', textContent: service.url, title: service.expect ? `${service.url}, answering “${service.expect}”` : service.url }),
 		el('p', { className: 'card-state', textContent: state.label }),
 		u ? el('p', { className: 'card-figure', textContent: showPercent(percent(u.year.up, u.year.tracked)) }) : null,
 		u ? el('p', { className: 'card-detail', textContent: lost > 0 ? `Down for ${downtime(lost)}` : 'No downtime' }) : null,
 		u ? el('p', { className: 'card-detail muted', textContent: `30 days: ${showPercent(percent(u.month.up, u.month.tracked))}` }) : null,
 		monthStrip(service, now),
-		el('div', { className: 'card-foot' }, el('span', { textContent: `Runs on ${service.server}` }), remove));
+		el('div', { className: 'card-foot' }, el('span', { textContent: `Runs on ${service.server}` }), el('span', { className: 'actions' }, edit, remove)));
+	card.dataset.id = service.id;
+	handle.addEventListener('pointerdown', event => drag(event, card));
+	handle.addEventListener('keydown', event => nudge(event, card, handle));
+	return card;
+}
+
+/** The services under their groups' headings: groups in the order of their first card, ungrouped ones too. */
+function serviceGroups(services, servers, now) {
+	const groups = [];
+	for (const service of services) {
+		const name = service.group ?? '';
+		let group = groups.find(g => g.name === name);
+		if (!group) groups.push((group = { name, cards: [] }));
+		group.cards.push(serviceCard(service, servers, now));
+	}
+	return groups.map(g => {
+		const section = el('div', { className: 'group' }, g.name ? el('h3', { className: 'group-title', textContent: g.name }) : null, el('div', { className: 'cards' }, ...g.cards));
+		section.dataset.group = g.name;
+		return section;
+	});
+}
+
+// --- arranging -------------------------------------------------------------------------------------------------
+
+/** True while a card is dragged or the editor is open: the minute's refresh waits. */
+let busy = false;
+
+/** Saves the cards' order as it is on the page, each under the group it sits in, then shows it as saved. */
+async function saveOrder() {
+	const order = [...document.querySelectorAll('#services .group')].flatMap(group =>
+		[...group.querySelectorAll('.card[data-id]')].map(card => ({ id: Number(card.dataset.id), group: group.dataset.group })));
+	const response = await fetch('/api/services/order', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ order }) }).catch(() => null);
+	if (!response?.ok) alert(response ? await response.text() : 'The dashboard can’t be reached: the new order wasn’t saved.');
+	await load();
+}
+
+/** Drags a card by its handle (mouse or touch): it drops before or after the card under the pointer, in that group. */
+function drag(event, card) {
+	if (event.button !== 0) return;
+	event.preventDefault();
+	busy = true;
+	const box = card.getBoundingClientRect();
+	const [dx, dy] = [event.clientX - box.left, event.clientY - box.top];
+	const placeholder = el('div', { className: 'card placeholder' });
+	placeholder.style.height = `${box.height}px`;
+	card.before(placeholder);
+	card.classList.add('dragging');
+	Object.assign(card.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px` });
+	const move = e => {
+		card.style.left = `${e.clientX - dx}px`;
+		card.style.top = `${e.clientY - dy}px`;
+		const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('#services .card:not(.placeholder):not(.dragging)');
+		if (target) {
+			const t = target.getBoundingClientRect();
+			target[e.clientX < t.left + t.width / 2 ? 'before' : 'after'](placeholder);
+		}
+	};
+	const drop = () => {
+		window.removeEventListener('pointermove', move);
+		placeholder.replaceWith(card);
+		card.classList.remove('dragging');
+		card.removeAttribute('style');
+		busy = false;
+		saveOrder();
+	};
+	window.addEventListener('pointermove', move);
+	window.addEventListener('pointerup', drop, { once: true });
+	window.addEventListener('pointercancel', drop, { once: true });
+}
+
+/** The arrow keys move a card one place earlier or later, across groups too. */
+function nudge(event, card, handle) {
+	const step = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[event.key];
+	if (!step) return;
+	event.preventDefault();
+	const cards = [...document.querySelectorAll('#services .card[data-id]')];
+	const other = cards[cards.indexOf(card) + step];
+	if (!other) return;
+	other[step < 0 ? 'before' : 'after'](card);
+	handle.focus();
+	saveOrder().then(() => document.querySelector(`#services .card[data-id="${card.dataset.id}"] .handle`)?.focus());
+}
+
+/** The editor: name, address, expected text and group. */
+function openEditor(service) {
+	const dialog = document.getElementById('service-dialog');
+	const form = document.getElementById('edit-form');
+	form.dataset.id = service.id;
+	form.elements.name.value = service.name;
+	form.elements.url.value = service.url;
+	form.elements.expect.value = service.expect ?? '';
+	form.elements.group.value = service.group ?? '';
+	document.getElementById('edit-server').textContent = service.server;
+	document.getElementById('edit-error').hidden = true;
+	busy = true;
+	dialog.showModal();
 }
 
 function headline(servers, now) {
@@ -230,6 +330,7 @@ function headline(servers, now) {
 }
 
 async function load() {
+	if (busy) return;
 	const main = document.getElementById('servers');
 	try {
 		const response = await fetch('/api/servers', { cache: 'no-store' });
@@ -243,8 +344,9 @@ async function load() {
 		const up = services.filter(s => serviceState(s, servers.find(v => v.name === s.server), now).key === 'up').length;
 		document.getElementById('services-summary').textContent = services.length ? `${up} of ${services.length} up` : '';
 		document.getElementById('services').replaceChildren(...(services.length
-			? services.map(s => serviceCard(s, servers, now))
+			? serviceGroups(services, servers, now)
 			: [el('p', { className: 'empty', textContent: 'No services yet: add one below, on the server it runs on.' })]));
+		document.getElementById('groups').replaceChildren(...[...new Set(services.map(s => s.group).filter(Boolean))].map(g => el('option', { value: g })));
 		// The servers a service can run on, keeping the choice in progress.
 		const select = document.getElementById('service-server');
 		const chosen = select.value;
@@ -280,7 +382,7 @@ document.getElementById('service-form').addEventListener('submit', async event =
 	const form = event.target;
 	const error = document.getElementById('service-error');
 	error.hidden = true;
-	const body = { name: form.elements.name.value, url: form.elements.url.value, expect: form.elements.expect.value, server: form.elements.server.value };
+	const body = { name: form.elements.name.value, url: form.elements.url.value, expect: form.elements.expect.value, group: form.elements.group.value, server: form.elements.server.value };
 	const response = await fetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
 	if (!response?.ok) {
 		error.textContent = response ? await response.text() : 'The dashboard can’t be reached. Check your connection and try again.';
@@ -288,6 +390,24 @@ document.getElementById('service-form').addEventListener('submit', async event =
 		return;
 	}
 	for (const field of ['name', 'url', 'expect']) form.elements[field].value = '';
+	load();
+});
+document.getElementById('edit-form').addEventListener('submit', async event => {
+	event.preventDefault();
+	const form = event.target;
+	const error = document.getElementById('edit-error');
+	const body = { name: form.elements.name.value, url: form.elements.url.value, expect: form.elements.expect.value, group: form.elements.group.value };
+	const response = await fetch(`/api/services/${form.dataset.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+	if (!response?.ok) {
+		error.textContent = response ? await response.text() : 'The dashboard can’t be reached. Check your connection and try again.';
+		error.hidden = false;
+		return;
+	}
+	document.getElementById('service-dialog').close();
+});
+document.getElementById('edit-cancel').addEventListener('click', () => document.getElementById('service-dialog').close());
+document.getElementById('service-dialog').addEventListener('close', () => {
+	busy = false;
 	load();
 });
 document.getElementById('add-copy').addEventListener('click', async event => {

@@ -100,6 +100,21 @@ describe('the store', () => {
 		assert.equal(store.checksFor(host.id), '');
 	});
 
+	it('keeps services in the order and groups they’re given; edits change only what’s given', () => {
+		const store = fresh();
+		store.addServer('web');
+		const [a, b, c] = ['A', 'B', 'C'].map(name => store.addService({ name, server: 'web', url: 'https://example.com/' })!);
+		assert.deepEqual(store.services().map(s => s.name), ['A', 'B', 'C'], 'in the order added');
+		store.arrange([{ id: c, group: 'Mail' }, { id: a, group: '' }]);
+		assert.deepEqual(store.services().map(s => [s.name, s.group_name]), [['C', 'Mail'], ['A', null], ['B', null]], 'B, not listed, after them');
+		assert.ok(store.editService(b, { name: 'B2', group: 'Mail', expect: 'ok' }));
+		const b2 = store.services().find(s => s.id === b)!;
+		assert.deepEqual([b2.name, b2.group_name, b2.expect, b2.url], ['B2', 'Mail', 'ok', 'https://example.com/']);
+		store.editService(b, { expect: '', group: '' });
+		assert.deepEqual([store.services().find(s => s.id === b)!.expect, store.services().find(s => s.id === b)!.group_name], [null, null]);
+		assert.equal(store.editService(999, { name: 'x' }), false);
+	});
+
 	it('forgets what’s older than two years', () => {
 		const store = fresh();
 		store.addServer('old');

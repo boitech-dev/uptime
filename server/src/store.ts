@@ -25,9 +25,11 @@ export type Sample = { at: number; boot: number; online: boolean };
 export type Check = { at: number; service: number; ok: boolean; ms: number };
 export type ServerRow = { id: number; name: string; created_at: number; first_at: number | null; last_at: number | null; last_online: number | null };
 export type ServiceRow = {
-	id: number; name: string; server_id: number; server: string; url: string; expect: string | null; created_at: number;
-	first_at: number | null; last_at: number | null; last_ok: number | null; last_ms: number | null;
+	id: number; name: string; server_id: number; server: string; url: string; expect: string | null; group_name: string | null; position: number | null;
+	created_at: number; first_at: number | null; last_at: number | null; last_ok: number | null; last_ms: number | null;
 };
+/** What can change in a service once added (not its server: its history depends on that server). */
+export type ServiceEdit = { name?: string; url?: string; expect?: string; group?: string };
 
 /** Sorts and merges spans that overlap, or nearly touch (within `slack`). */
 export function merge(spans: Span[], slack = 0): Span[] {
@@ -147,6 +149,9 @@ export function openStore(path: string) {
 			url TEXT NOT NULL,
 			-- Text the answer must contain (http, tcp).
 			expect TEXT,
+			-- Where its card goes: under its group's heading, if any, in the order of positions.
+			group_name TEXT,
+			position INTEGER,
 			created_at INTEGER NOT NULL,
 			-- Its first and latest checks, and how the latest went.
 			first_at INTEGER,
@@ -162,6 +167,10 @@ export function openStore(path: string) {
 		);
 		CREATE INDEX IF NOT EXISTS service_spans_by_service ON service_spans(service_id, end_at);
 	`);
+	// Databases from before groups and positions.
+	if (!(db.prepare('PRAGMA table_info(services)').all() as { name: string }[]).some(c => c.name === 'position')) {
+		db.exec('ALTER TABLE services ADD COLUMN group_name TEXT; ALTER TABLE services ADD COLUMN position INTEGER');
+	}
 
 	/** Merged spans in `table`, per owner (`keys`): adding one joins it to those it overlaps or nearly touches. */
 	function spanTable(table: string, keys: string[]) {
@@ -219,15 +228,35 @@ export function openStore(path: string) {
 		serverByToken: (token: string) => db.prepare('SELECT id, name FROM servers WHERE token_hash = ?').get(hashToken(token)) as { id: number; name: string } | undefined,
 
 		/** Adds a service to the server it runs on (by name); its address must pass `serviceProblem`. */
-		addService(service: { name: string; server: string; url: string; expect?: string }, now = Math.floor(Date.now() / 1000)) {
+		/** Adds a service, last, to the server it runs on (by name); its address must pass `serviceProblem`. */
+		addService(service: { name: string; server: string; url: string; expect?: string; group?: string }, now = Math.floor(Date.now() / 1000)) {
 			const server = db.prepare('SELECT id FROM servers WHERE name = ?').get(service.server) as { id: number } | undefined;
 			if (!server) return null;
-			return Number(db.prepare('INSERT INTO services (name, server_id, url, expect, created_at) VALUES (?, ?, ?, ?, ?)').run(
-				service.name, server.id, service.url, service.expect || null, now).lastInsertRowid);
+			return Number(db.prepare(`INSERT INTO services (name, server_id, url, expect, group_name, position, created_at)
+				VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM services), ?)`).run(
+				service.name, server.id, service.url, service.expect || null, service.group || null, now).lastInsertRowid);
+		},
+		/** Changes what's given; an empty expected text or group removes it. */
+		editService(id: number, edit: ServiceEdit) {
+			const sets: [string, string | null][] = [];
+			if (edit.name !== undefined) sets.push(['name', edit.name]);
+			if (edit.url !== undefined) sets.push(['url', edit.url]);
+			if (edit.expect !== undefined) sets.push(['expect', edit.expect || null]);
+			if (edit.group !== undefined) sets.push(['group_name', edit.group || null]);
+			if (!sets.length) return Boolean(db.prepare('SELECT 1 FROM services WHERE id = ?').get(id));
+			return db.prepare(`UPDATE services SET ${sets.map(([column]) => `${column} = ?`).join(', ')} WHERE id = ?`).run(...sets.map(([, value]) => value), id).changes > 0;
+		},
+		/** Puts the services in this order, each under its group; services not listed keep their place after them. */
+		arrange(order: { id: number; group: string }[]) {
+			transaction(() => {
+				const set = db.prepare('UPDATE services SET position = ?, group_name = ? WHERE id = ?');
+				order.forEach(({ id, group }, i) => set.run(i + 1, group || null, id));
+				db.prepare('UPDATE services SET position = position + ? WHERE id NOT IN (SELECT value FROM json_each(?))').run(order.length, JSON.stringify(order.map(o => o.id)));
+			});
 		},
 		removeService: (id: number) => db.prepare('DELETE FROM services WHERE id = ?').run(id).changes > 0,
 		services: () => db.prepare(`SELECT v.*, s.name AS server FROM services v JOIN servers s ON s.id = v.server_id
-			ORDER BY v.name COLLATE NOCASE, s.name COLLATE NOCASE`).all() as ServiceRow[],
+			ORDER BY COALESCE(v.position, 1e9), v.id`).all() as ServiceRow[],
 		/** What a server's agent checks: one "<id>\t<address>\t<expected text>" line per service. */
 		checksFor: (serverId: number) => (db.prepare('SELECT id, url, expect FROM services WHERE server_id = ? ORDER BY id').all(serverId) as { id: number; url: string; expect: string | null }[])
 			.map(s => `${s.id}\t${s.url}\t${s.expect ?? ''}\n`).join(''),
