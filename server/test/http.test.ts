@@ -54,6 +54,36 @@ describe('the dashboard', () => {
 		assert.equal((await fetch(`${base}/api/servers`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"name":"x"}' })).status, 401);
 	});
 
+	it('adds services from the page, lists them for their server’s agent, and removes them', async () => {
+		const token = store.addServer('db-host');
+		const post = (body: unknown, headers: Record<string, string> = {}) =>
+			fetch(`${base}/api/services`, { method: 'POST', headers: { ...login, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+		assert.equal((await post({ name: 'MariaDB', server: 'db-host', url: 'mysql://x' })).status, 400);
+		assert.equal((await post({ name: 'MariaDB', server: 'nobody', url: 'tcp://127.0.0.1:3306' })).status, 400);
+		assert.equal((await post({ name: 'MariaDB', server: 'db-host', url: 'tcp://127.0.0.1:3306' }, { origin: 'https://elsewhere.test' })).status, 403);
+		const res = await post({ name: 'MariaDB', server: 'db-host', url: 'tcp://127.0.0.1:3306', expect: 'MariaDB' });
+		assert.equal(res.status, 201);
+		const { id } = await res.json() as { id: number };
+
+		const checks = await fetch(`${base}/api/checks`, { headers: { authorization: `Bearer ${token}` } });
+		assert.equal(await checks.text(), `${id}\ttcp://127.0.0.1:3306\tMariaDB\n`);
+		assert.equal((await fetch(`${base}/api/checks`, { headers: { authorization: 'Bearer upt_wrong' } })).status, 401);
+
+		const now = Math.floor(Date.now() / 1000);
+		const report = await fetch(`${base}/api/report`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: `${now - 60} ${now - 3600} 1\n${now - 60} svc ${id} 1 4\n` });
+		assert.deepEqual(await report.json(), { accepted: 2, skipped: 0 });
+		const { services } = await (await fetch(`${base}/api/servers`, { headers: login })).json() as { services: { id: number; name: string; server: string; lastOk: boolean; lastMs: number; uptime: { year: { tracked: number; up: number } } }[] };
+		const mariadb = services.find(s => s.id === id)!;
+		assert.deepEqual([mariadb.name, mariadb.server, mariadb.lastOk, mariadb.lastMs], ['MariaDB', 'db-host', true, 4]);
+		assert.equal(mariadb.uptime.year.up, mariadb.uptime.year.tracked);
+
+		const remove = (headers: Record<string, string> = {}) => fetch(`${base}/api/services/${id}`, { method: 'DELETE', headers: { ...login, ...headers } });
+		assert.equal((await remove({ origin: 'https://elsewhere.test' })).status, 403);
+		assert.equal((await fetch(`${base}/api/services/${id}`, { method: 'DELETE' })).status, 401);
+		assert.equal((await remove()).status, 204);
+		assert.equal((await remove()).status, 404);
+	});
+
 	it('takes an agent’s report with its token, and shows the server’s uptime', async () => {
 		const token = store.addServer('web-2');
 		const now = Math.floor(Date.now() / 1000);

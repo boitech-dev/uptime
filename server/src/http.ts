@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * The dashboard's HTTP side:
- *   POST /api/report          agents send their samples (Bearer token), as text lines
- *   GET  /api/servers         every server's uptime, for the dashboard page (password)
+ *   POST /api/report          agents send their samples and service checks (Bearer token), as text lines
+ *   GET  /api/checks          the services an agent checks (Bearer token), as text lines
+ *   GET  /api/servers         every server's and service's uptime, for the dashboard page (password)
  *   POST /api/servers         adds a server: answers the one-line command that installs its agent (password)
+ *   POST /api/services        adds a service to the server it runs on (password)
+ *   DELETE /api/services/<id> removes a service and its history (password)
  *   GET  /agent/install.sh, /agent/uptime-agent    the agent, to install it (public: it's free software)
  *   GET  /health              for monitoring
  *   GET  /                    the dashboard page (password)
@@ -12,7 +15,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
-import { parseReport, type Store } from './store.ts';
+import { parseReport, serviceProblem, type Store } from './store.ts';
 
 const ROOT = new URL('../..', import.meta.url).pathname;
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.sh': 'text/plain; charset=utf-8', '': 'text/plain; charset=utf-8' };
@@ -75,34 +78,51 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 		return false;
 	}
 
-	async function report(req: IncomingMessage, res: ServerResponse) {
+	/** The agent's server, from its token. */
+	const agentServer = (req: IncomingMessage) => {
 		const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
-		const server = token && store.serverByToken(token);
+		return token ? store.serverByToken(token) : undefined;
+	};
+
+	async function report(req: IncomingMessage, res: ServerResponse) {
+		const server = agentServer(req);
 		if (!server) return send(res, 401, 'Unknown token.');
-		let body = '';
-		for await (const chunk of req) {
-			body += chunk;
-			if (body.length > MAX_REPORT) return send(res, 413, 'At most 1 MB per report.');
-		}
-		const { samples, skipped } = parseReport(body, Math.floor(Date.now() / 1000));
-		store.record(server.id, samples);
-		send(res, 200, JSON.stringify({ accepted: samples.length, skipped }), { 'content-type': 'application/json' });
+		const body = await read(req, MAX_REPORT);
+		if (body === null) return send(res, 413, 'At most 1 MB per report.');
+		const { samples, checks, skipped } = parseReport(body, Math.floor(Date.now() / 1000));
+		store.record(server.id, samples, checks);
+		send(res, 200, JSON.stringify({ accepted: samples.length + checks.length, skipped }), { 'content-type': 'application/json' });
 	}
 
-	async function addServer(req: IncomingMessage, res: ServerResponse) {
-		// Browsers send the password along on their own: only a same-origin JSON request may add a server.
+	/**
+	 * A change from the page, as JSON. Browsers send the password along on their own: only a same-origin request
+	 * may change anything (a JSON body or a DELETE from another site needs a preflight this server never answers).
+	 */
+	async function fromPage(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
 		const origin = req.headers.origin;
-		const sameOrigin = !origin || URL.parse(origin)?.host === req.headers.host;
-		if (!(req.headers['content-type'] ?? '').startsWith('application/json') || !sameOrigin) return send(res, 403, 'Add servers from the dashboard.');
-		let body = '';
-		for await (const chunk of req) {
-			body += chunk;
-			if (body.length > 10_000) return send(res, 413, 'Too long.');
+		const json = (req.headers['content-type'] ?? '').startsWith('application/json');
+		if ((req.method === 'POST' && !json) || (origin && URL.parse(origin)?.host !== req.headers.host)) {
+			send(res, 403, 'Make changes from the dashboard.');
+			return null;
 		}
-		let name = '';
+		const body = await read(req, 10_000);
+		if (body === null) {
+			send(res, 413, 'Too long.');
+			return null;
+		}
 		try {
-			name = String(JSON.parse(body).name ?? '').trim();
-		} catch { /* not JSON: no name */ }
+			const parsed = JSON.parse(body || '{}');
+			return parsed && typeof parsed === 'object' ? parsed : {};
+		} catch {
+			return {};
+		}
+	}
+	const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+
+	async function addServer(req: IncomingMessage, res: ServerResponse) {
+		const body = await fromPage(req, res);
+		if (!body) return;
+		const name = text(body.name);
 		if (!name || name.length > 80) return send(res, 400, 'Give the server a name, up to 80 characters.');
 		let token: string;
 		try {
@@ -113,20 +133,48 @@ export function createApp({ store, user, passwordHash, open = false, url }: Opti
 		send(res, 201, JSON.stringify({ name, command: installCommand(url ?? `https://${req.headers.host}`, token) }), { 'content-type': 'application/json' });
 	}
 
+	async function addService(req: IncomingMessage, res: ServerResponse) {
+		const body = await fromPage(req, res);
+		if (!body) return;
+		const [name, server, address, expect] = [text(body.name), text(body.server), text(body.url), text(body.expect)];
+		if (!name || name.length > 80) return send(res, 400, 'Give the service a name, up to 80 characters.');
+		const problem = serviceProblem(address, expect);
+		if (problem) return send(res, 400, problem);
+		const id = store.addService({ name, server, url: address, expect });
+		if (id === null) return send(res, 400, 'Choose the server it runs on.');
+		send(res, 201, JSON.stringify({ id }), { 'content-type': 'application/json' });
+	}
+
+	async function removeService(req: IncomingMessage, res: ServerResponse, id: number) {
+		if (!(await fromPage(req, res))) return;
+		send(res, store.removeService(id) ? 204 : 404, '');
+	}
+
 	function servers(res: ServerResponse) {
 		const now = Math.floor(Date.now() / 1000);
 		const list = store.servers().map(s => ({
 			name: s.name, firstAt: s.first_at, lastAt: s.last_at, lastOnline: s.last_online === null ? null : s.last_online === 1,
 			uptime: store.uptime(s, now),
 		}));
-		send(res, 200, JSON.stringify({ now, servers: list }), { 'content-type': 'application/json', 'cache-control': 'no-store' });
+		const services = store.services().map(s => ({
+			id: s.id, name: s.name, server: s.server, url: s.url, expect: s.expect, lastAt: s.last_at, lastOk: s.last_ok === null ? null : s.last_ok === 1,
+			lastMs: s.last_ms, uptime: store.serviceUptime(s, now),
+		}));
+		send(res, 200, JSON.stringify({ now, servers: list, services }), { 'content-type': 'application/json', 'cache-control': 'no-store' });
 	}
 
 	return createServer(async (req, res) => {
 		try {
 			const path = new URL(req.url ?? '/', 'http://x').pathname;
 			if (req.method === 'POST' && path === '/api/report') return await report(req, res);
+			if (req.method === 'GET' && path === '/api/checks') {
+				const server = agentServer(req);
+				return server ? send(res, 200, store.checksFor(server.id)) : send(res, 401, 'Unknown token.');
+			}
 			if (req.method === 'POST' && path === '/api/servers') return authorized(req, res) ? await addServer(req, res) : undefined;
+			if (req.method === 'POST' && path === '/api/services') return authorized(req, res) ? await addService(req, res) : undefined;
+			const serviceId = /^\/api\/services\/(\d{1,9})$/.exec(path)?.[1];
+			if (req.method === 'DELETE' && serviceId) return authorized(req, res) ? await removeService(req, res, Number(serviceId)) : undefined;
 			if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed.');
 			if (path === '/health') return send(res, 200, 'ok');
 			if (AGENT[path]) return file(res, AGENT[path]);
@@ -146,6 +194,16 @@ const SECURITY = {
 	'referrer-policy': 'no-referrer',
 	'content-security-policy': "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 };
+
+/** The request's body, or null past `limit` characters. */
+async function read(req: IncomingMessage, limit: number) {
+	let body = '';
+	for await (const chunk of req) {
+		body += chunk;
+		if (body.length > limit) return null;
+	}
+	return body;
+}
 
 function send(res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}) {
 	res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...SECURITY, ...headers }).end(body);

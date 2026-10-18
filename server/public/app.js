@@ -57,6 +57,34 @@ function dayLines(data) {
 	return [down > 0 ? `Machine down for ${downtime(down)}` : 'Machine running the whole time', `Offline for ${downtime(data.tracked - data.online)}`];
 }
 
+/** Shows a day's tooltip over its square (`.day`, with `data-day`) in `container`; returns what hides it. */
+function dayTips(container, linesOf) {
+	const tip = document.getElementById('tip');
+	let shown = null;
+	const show = event => {
+		const cell = event.target.closest('.day:not(.outside)');
+		if (!cell || cell === shown) return;
+		shown?.classList.remove('hover');
+		shown = cell;
+		cell.classList.add('hover');
+		const day = Number(cell.dataset.day);
+		tip.replaceChildren(el('strong', { textContent: dateText(day, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) }), ...linesOf(day).map(l => el('div', { textContent: l })));
+		tip.hidden = false;
+		const box = cell.getBoundingClientRect();
+		tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, box.left + box.width / 2 - tip.offsetWidth / 2))}px`;
+		tip.style.top = `${box.top - tip.offsetHeight - 8}px`;
+	};
+	const hide = () => {
+		shown?.classList.remove('hover');
+		shown = null;
+		tip.hidden = true;
+	};
+	container.addEventListener('pointerover', show);
+	container.addEventListener('pointerdown', show);
+	container.addEventListener('pointerleave', hide);
+	return hide;
+}
+
 /**
  * The year as a grid, like GitHub's: a column per week (Monday first), a square per day. Calm days are pale green;
  * a day with downtime is red if the machine was down, amber if it ran but was offline, the more opaque the longer.
@@ -95,30 +123,7 @@ function yearGrid(server, now) {
 		months.append(label);
 	}
 	days.setAttribute('aria-label', bad ? `Over the last ${DAYS} days, ${bad} days with downtime or time offline.` : 'No downtime and no time offline over the time tracked.');
-
-	const tip = document.getElementById('tip');
-	let shown = null;
-	const show = event => {
-		const cell = event.target.closest('.day:not(.outside)');
-		if (!cell || cell === shown) return;
-		shown?.classList.remove('hover');
-		shown = cell;
-		cell.classList.add('hover');
-		const day = Number(cell.dataset.day);
-		tip.replaceChildren(el('strong', { textContent: dateText(day, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) }), ...dayLines(byDay.get(day)).map(l => el('div', { textContent: l })));
-		tip.hidden = false;
-		const box = cell.getBoundingClientRect();
-		tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, box.left + box.width / 2 - tip.offsetWidth / 2))}px`;
-		tip.style.top = `${box.top - tip.offsetHeight - 8}px`;
-	};
-	const hide = () => {
-		shown?.classList.remove('hover');
-		shown = null;
-		tip.hidden = true;
-	};
-	days.addEventListener('pointerover', show);
-	days.addEventListener('pointerdown', show);
-	days.addEventListener('pointerleave', hide);
+	const hide = dayTips(days, day => dayLines(byDay.get(day)));
 
 	// Narrow screens scroll the weeks sideways, starting from today.
 	const scroller = el('div', { className: 'weeks' }, months, days);
@@ -158,6 +163,65 @@ function serverSection(server, now) {
 		yearGrid(server, now));
 }
 
+/** A service now: up when its latest check got through and its server is online; silent past two missed checks. */
+function serviceState(service, server, now) {
+	if (!service.lastAt) return { key: 'silent', label: 'Waiting for its first check' };
+	const age = now - service.lastAt;
+	if (age > STALE) return { key: 'silent', label: `No news for ${duration(age)}` };
+	if (server && !server.lastOnline) return { key: 'down', label: `Down: ${server.name} is offline` };
+	const speed = service.lastMs < 1000 ? `${service.lastMs} ms` : `${(service.lastMs / 1000).toFixed(1)} s`;
+	return service.lastOk ? { key: 'up', label: `Up, answered in ${speed}` } : { key: 'down', label: 'Down' };
+}
+
+/** The last 30 days, a square each, shaded like the year grid. */
+function monthStrip(service, now) {
+	const today = Math.floor(now / DAY) * DAY;
+	const byDay = new Map((service.uptime?.days ?? []).map(d => [d.day, d]));
+	const strip = el('div', { className: 'strip', role: 'img' });
+	let bad = 0;
+	for (let day = today - 29 * DAY; day <= today; day += DAY) {
+		const cell = el('span', { className: 'day' });
+		cell.dataset.day = day;
+		const data = byDay.get(day);
+		if (!data?.tracked) cell.classList.add('untracked');
+		else if (data.tracked - data.up > 0) {
+			bad++;
+			cell.classList.add('down');
+			cell.style.setProperty('--depth', `${depth(data.tracked - data.up)}%`);
+		} else cell.classList.add('calm');
+		strip.append(cell);
+	}
+	strip.setAttribute('aria-label', bad ? `Over the last 30 days, ${bad} days with downtime.` : 'No downtime over the last 30 days tracked.');
+	dayTips(strip, day => {
+		const data = byDay.get(day);
+		if (!data?.tracked) return ['Not tracked yet'];
+		return data.tracked - data.up > 0 ? [`Down for ${downtime(data.tracked - data.up)}`] : ['Up the whole time'];
+	});
+	return strip;
+}
+
+function serviceCard(service, servers, now) {
+	const state = serviceState(service, servers.find(s => s.name === service.server), now);
+	const u = service.uptime;
+	const lost = u ? u.year.tracked - u.year.up : 0;
+	const remove = el('button', { type: 'button', className: 'link-button', textContent: 'Remove' });
+	remove.addEventListener('click', async () => {
+		if (!confirm(`Remove ${service.name} and its history?`)) return;
+		const response = await fetch(`/api/services/${service.id}`, { method: 'DELETE' }).catch(() => null);
+		if (!response?.ok) alert(response ? await response.text() : 'The dashboard can’t be reached. Check your connection and try again.');
+		load();
+	});
+	return el('article', { className: `card ${state.key}` },
+		el('div', { className: 'card-head' }, el('span', { className: 'dot' }), el('h3', { textContent: service.name })),
+		el('p', { className: 'address', textContent: service.url, title: service.expect ? `${service.url}, answering “${service.expect}”` : service.url }),
+		el('p', { className: 'card-state', textContent: state.label }),
+		u ? el('p', { className: 'card-figure', textContent: showPercent(percent(u.year.up, u.year.tracked)) }) : null,
+		u ? el('p', { className: 'card-detail', textContent: lost > 0 ? `Down for ${downtime(lost)}` : 'No downtime' }) : null,
+		u ? el('p', { className: 'card-detail muted', textContent: `30 days: ${showPercent(percent(u.month.up, u.month.tracked))}` }) : null,
+		monthStrip(service, now),
+		el('div', { className: 'card-foot' }, el('span', { textContent: `Runs on ${service.server}` }), remove));
+}
+
 function headline(servers, now) {
 	if (!servers.length) return 'No servers yet';
 	const online = servers.filter(s => stateOf(s, now).key === 'online').length;
@@ -170,12 +234,22 @@ async function load() {
 	try {
 		const response = await fetch('/api/servers', { cache: 'no-store' });
 		if (!response.ok) throw new Error(`the dashboard answered ${response.status}`);
-		const { now, servers } = await response.json();
+		const { now, servers, services } = await response.json();
 		document.getElementById('headline').textContent = headline(servers, now);
 		document.getElementById('updated').textContent = `Updated at ${timeText(now)}.`;
 		main.replaceChildren(...(servers.length
 			? servers.map(s => serverSection(s, now))
 			: [el('p', { className: 'empty', textContent: 'Add your first server below: you’ll get the one line to run on it.' })]));
+		const up = services.filter(s => serviceState(s, servers.find(v => v.name === s.server), now).key === 'up').length;
+		document.getElementById('services-summary').textContent = services.length ? `${up} of ${services.length} up` : '';
+		document.getElementById('services').replaceChildren(...(services.length
+			? services.map(s => serviceCard(s, servers, now))
+			: [el('p', { className: 'empty', textContent: 'No services yet: add one below, on the server it runs on.' })]));
+		// The servers a service can run on, keeping the choice in progress.
+		const select = document.getElementById('service-server');
+		const chosen = select.value;
+		select.replaceChildren(...servers.map(s => el('option', { value: s.name, textContent: s.name })));
+		if (servers.some(s => s.name === chosen)) select.value = chosen;
 	} catch (error) {
 		main.replaceChildren(el('p', { className: 'error', textContent: `Couldn’t load the servers: ${error.message}. Trying again in a minute.` }));
 	}
@@ -198,6 +272,22 @@ document.getElementById('add-form').addEventListener('submit', async event => {
 	document.getElementById('add-command').textContent = command;
 	document.getElementById('add-result').hidden = false;
 	input.value = '';
+	load();
+});
+// Adding a service: the server it runs on checks it from its next minute.
+document.getElementById('service-form').addEventListener('submit', async event => {
+	event.preventDefault();
+	const form = event.target;
+	const error = document.getElementById('service-error');
+	error.hidden = true;
+	const body = { name: form.elements.name.value, url: form.elements.url.value, expect: form.elements.expect.value, server: form.elements.server.value };
+	const response = await fetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+	if (!response?.ok) {
+		error.textContent = response ? await response.text() : 'The dashboard can’t be reached. Check your connection and try again.';
+		error.hidden = false;
+		return;
+	}
+	for (const field of ['name', 'url', 'expect']) form.elements[field].value = '';
 	load();
 });
 document.getElementById('add-copy').addEventListener('click', async event => {

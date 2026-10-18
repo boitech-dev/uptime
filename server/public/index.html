@@ -17,6 +17,27 @@
 		<p class="legend"><span class="key-calm">Running and online</span><span class="key-down">Machine down</span><span class="key-offline">Running but offline</span><span class="key-untracked">Not tracked yet</span><span class="key-depth">The longer, the stronger the color</span></p>
 	</header>
 	<main id="servers"></main>
+	<section class="services" aria-labelledby="services-title">
+		<div class="services-head">
+			<h2 id="services-title">Services</h2>
+			<p id="services-summary" class="services-summary"></p>
+		</div>
+		<p class="services-lede">Each service is checked every minute by the server it runs on, and counts as up only while that server is online.</p>
+		<div id="services" class="cards"></div>
+		<details class="add-service">
+			<summary>Add a service</summary>
+			<form id="service-form" class="service-form">
+				<label>Name <input name="name" required maxlength="80" autocomplete="off" placeholder="Forgejo"></label>
+				<label>Address <input name="url" required maxlength="500" autocomplete="off" spellcheck="false" placeholder="https://git.example.com/api/healthz"></label>
+				<p class="hint">An <code>http(s)://</code> address must answer with a status under 400, a <code>ws(s)://</code> one must accept the WebSocket, a <code>tcp://host:port</code> one must accept the connection.</p>
+				<label>Text it must answer, if any <input name="expect" maxlength="200" autocomplete="off" spellcheck="false" placeholder="pass"></label>
+				<label>Runs on <select name="server" id="service-server" required></select></label>
+				<p class="hint">That server checks it, so a <code>127.0.0.1</code> address reaches the service on it.</p>
+				<div><button type="submit">Add service</button></div>
+				<p id="service-error" class="add-error" role="alert" hidden></p>
+			</form>
+		</details>
+	</section>
 	<section class="add" aria-labelledby="add-title">
 		<h2 id="add-title">Add a server</h2>
 		<form id="add-form">

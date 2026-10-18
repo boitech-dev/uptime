@@ -4,7 +4,12 @@
 # can't be reached, so nothing is lost while this server, or the dashboard's, is cut off.
 #
 # A sample is one line: "<unix time> <boot time> <1 online | 0 offline>". Online means one of the hosts
-# answered a ping.
+# answered a ping. Then each service the dashboard lists for this server is checked, one line each:
+# "<unix time> svc <service> <1 up | 0 down> <response time in ms>". A service is up when it answers:
+#   http(s)://  with a status under 400 (after redirects), and the expected text in the page, if any;
+#   ws(s)://    by accepting the WebSocket (101 Switching Protocols);
+#   tcp://      by accepting the connection, and sending the expected text in its first seconds, if any
+#               (a database's greeting, a mail server's banner).
 #
 # Settings, in /etc/uptime-agent.conf (or the file UPTIME_CONF names):
 #   UPTIME_URL    the dashboard, e.g. https://uptime.example.com
@@ -35,12 +40,51 @@ done
 
 echo "$now $boot $online" >>"$STATE/outbox"
 
+# The services to check: the dashboard's list, or the last one it gave while it can't be reached.
+auth() { printf 'header = "Authorization: Bearer %s"\n' "$UPTIME_TOKEN"; }
+if auth | curl --config - -fsS --max-time 10 -o "$STATE/checks.new" "$UPTIME_URL/api/checks"; then
+	mv "$STATE/checks.new" "$STATE/checks"
+fi
+
+# One check: prints its line. curl 8.5 has no WebSocket, so it asks for the upgrade itself; it waits for its time
+# limit on an upgraded socket or an open TCP connection, which is why checks run side by side.
+check() {
+	id=$1 url=$2 expect=$3 body="$STATE/body.$1" ok=0
+	case $url in
+	ws://* | wss://*)
+		out=$(curl -s --http1.1 -m 4 -o /dev/null -w '%{http_code} %{time_starttransfer}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+			-H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dXB0aW1lLWNoZWNrLWtleQ==' "http${url#ws}" </dev/null || true)
+		[ "${out%% *}" = 101 ] && ok=1
+		;;
+	tcp://*)
+		out=$(curl -s --connect-timeout 3 -m 4 -o "$body" -w '%{http_code} %{time_connect}' "telnet://${url#tcp://}" </dev/null || true)
+		[ "$(awk -v t="${out#* }" 'BEGIN { print (t > 0) }')" = 1 ] && ok=1
+		;;
+	*)
+		out=$(curl -sL -m 10 -o "$body" -w '%{http_code} %{time_total}' "$url" </dev/null || true)
+		[ "${out%% *}" -ge 200 ] 2>/dev/null && [ "${out%% *}" -lt 400 ] && ok=1
+		;;
+	esac
+	if [ "$ok" = 1 ] && [ -n "$expect" ] && ! grep -aqF -- "$expect" "$body" 2>/dev/null; then ok=0; fi
+	rm -f "$body"
+	echo "$now svc $id $ok $(awk -v t="${out#* }" 'BEGIN { printf "%d", t * 1000 }')"
+}
+if [ -s "$STATE/checks" ]; then
+	tab=$(printf '\t')
+	while IFS=$tab read -r id url expect; do
+		case $id in *[!0-9]* | '') continue ;; esac
+		check "$id" "$url" "$expect" >"$STATE/result.$id" </dev/null &
+	done <"$STATE/checks"
+	wait
+	cat "$STATE"/result.* >>"$STATE/outbox" 2>/dev/null || true
+	rm -f "$STATE"/result.*
+fi
+
 # Oldest samples first; dropped once the dashboard has them. Ticks never overlap (a systemd oneshot), so nothing
 # writes to the outbox meanwhile. The token goes through stdin, not the command line other users can read.
 # shortcut: while the dashboard is unreachable the outbox grows ~13 MB a year; cap it if a server can stay cut off that long.
 head -n "$BATCH" "$STATE/outbox" >"$STATE/batch"
-if printf 'header = "Authorization: Bearer %s"\n' "$UPTIME_TOKEN" |
-	curl --config - -fsS --max-time 30 -H 'Content-Type: text/plain' --data-binary "@$STATE/batch" "$UPTIME_URL/api/report" >/dev/null; then
+if auth | curl --config - -fsS --max-time 30 -H 'Content-Type: text/plain' --data-binary "@$STATE/batch" "$UPTIME_URL/api/report" >/dev/null; then
 	tail -n "+$((BATCH + 1))" "$STATE/outbox" >"$STATE/outbox.new"
 	mv "$STATE/outbox.new" "$STATE/outbox"
 fi

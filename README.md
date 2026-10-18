@@ -18,7 +18,11 @@ The dashboard shows, for each server:
   machine was down, amber when it ran but was offline, the stronger the color the longer. Hover over a day for its
   details.
 
-History is kept for two years. Uptime counts from a server's first sample; until then it shows as not tracked yet.
+And for each service (a website, an API, a WebSocket server, a database…), a card with the same figures and the
+last 30 days. A service runs on one of the servers, whose agent checks it every minute; it counts as up only while
+those checks get through **and** that server is online.
+
+History is kept for two years. Uptime counts from the first sample or check; until then it shows as not tracked yet.
 
 ## Install the dashboard
 
@@ -76,6 +80,28 @@ systemctl disable --now uptime-agent.timer
 rm /etc/systemd/system/uptime-agent.* /usr/local/bin/uptime-agent /etc/uptime-agent.conf
 ```
 
+## Add a service
+
+On the dashboard, open **Add a service** under the service cards: give it a name, an address, optionally a text its
+answer must contain, and the server it runs on. That server's agent starts checking it within a minute, from that
+server, so `127.0.0.1` reaches a service that only listens locally. A service is up when it answers:
+
+| Address | Up when |
+| --- | --- |
+| `https://git.example.com/api/healthz` | it answers with a status under 400 (after redirects), with the text in the page if one is given |
+| `wss://example.com/v1/ws` | it accepts the WebSocket (101 Switching Protocols) |
+| `tcp://127.0.0.1:3306` | it accepts the connection, and sends the text in its first seconds if one is given (`MariaDB` in a MariaDB greeting, `220` in a mail server's banner) |
+
+Each card's **Remove** removes the service and its history.
+
+## Update an agent
+
+On the server, as root, run the installer again without settings: it keeps the ones it has.
+
+```sh
+curl -fsSL https://uptime.example.com/agent/install.sh | sudo sh
+```
+
 ## The `uptimectl` command
 
 On the dashboard's server:
@@ -91,12 +117,15 @@ On the dashboard's server:
 
 ## How it's measured
 
-Each minute the agent writes one line, `<time> <boot time> <1 online | 0 offline>`, and sends the lines the dashboard
-doesn't have yet (up to 10,000 at a time). The dashboard turns them into time spans:
+Each minute the agent writes one line, `<time> <boot time> <1 online | 0 offline>`, then checks its services (side by
+side, the list the dashboard last gave it if the dashboard can't be reached), one line each,
+`<time> svc <service> <1 up | 0 down> <response time in ms>`, and sends the lines the dashboard doesn't have yet (up
+to 10,000 at a time). The dashboard turns them into time spans:
 
 - A sample proves the machine ran from its boot until then. So after a restart, the downtime is the time between
   the last sample before it and the new boot.
-- An online sample proves the minute before it was online.
+- An online sample proves the minute before it was online; so does a service check that got through, for its service.
+- A service is up during the time its checks got through and its server was online, both.
 - Once a server has missed two minutes of samples, the time since its latest one counts as down until its samples
   arrive: from the dashboard, a server that's down and one that can't reach it look the same until it reports again.
 

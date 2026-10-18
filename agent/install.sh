@@ -4,7 +4,9 @@
 #
 #   curl -fsSL https://uptime.example.com/agent/install.sh | sudo UPTIME_URL=https://uptime.example.com UPTIME_TOKEN=upt_… sh
 #
-# Running it again updates the agent and its settings. To remove it:
+# Running it again updates the agent; without UPTIME_URL and UPTIME_TOKEN it keeps the ones it has:
+#   curl -fsSL https://uptime.example.com/agent/install.sh | sudo sh
+# To remove it:
 #   systemctl disable --now uptime-agent.timer; rm /etc/systemd/system/uptime-agent.* /usr/local/bin/uptime-agent /etc/uptime-agent.conf
 #
 # SPDX-License-Identifier: AGPL-3.0-only
@@ -15,6 +17,7 @@ umask 022
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
+if [ -z "${UPTIME_URL:-}${UPTIME_TOKEN:-}" ] && [ -r /etc/uptime-agent.conf ]; then . /etc/uptime-agent.conf; fi
 : "${UPTIME_URL:?UPTIME_URL is missing}"
 : "${UPTIME_TOKEN:?UPTIME_TOKEN is missing}"
 for tool in curl ping awk systemctl; do
@@ -27,8 +30,12 @@ curl -fsSL -o /usr/local/bin/uptime-agent.new "$UPTIME_URL/agent/uptime-agent" |
 chmod 0755 /usr/local/bin/uptime-agent.new
 mv /usr/local/bin/uptime-agent.new /usr/local/bin/uptime-agent
 
-# The token: readable by root and the agent only.
-(umask 077 && printf 'UPTIME_URL=%s\nUPTIME_TOKEN=%s\n' "$UPTIME_URL" "$UPTIME_TOKEN" >/etc/uptime-agent.conf)
+# The token: readable by root and the agent only. Other settings already there (UPTIME_HOSTS) stay.
+(umask 077 && {
+	printf 'UPTIME_URL=%s\nUPTIME_TOKEN=%s\n' "$UPTIME_URL" "$UPTIME_TOKEN"
+	grep -vE '^UPTIME_(URL|TOKEN)=' /etc/uptime-agent.conf 2>/dev/null || true
+} >/etc/uptime-agent.conf.new)
+mv /etc/uptime-agent.conf.new /etc/uptime-agent.conf
 chown root:uptime-agent /etc/uptime-agent.conf
 chmod 0640 /etc/uptime-agent.conf
 

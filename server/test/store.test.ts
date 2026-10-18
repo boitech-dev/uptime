@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { DAY, KEEP, merge, openStore, parseReport, spansOf, type Sample } from '../src/store.ts';
+import { DAY, KEEP, intersect, merge, openStore, parseReport, serviceProblem, spansOf, type Sample } from '../src/store.ts';
 
 const fresh = () => openStore(join(mkdtempSync(join(tmpdir(), 'uptime-store-')), 'uptime.db'));
 /** One sample a minute from `from` for `minutes`, booted at `boot`, online unless listed. */
@@ -30,6 +30,20 @@ describe('spans', () => {
 		const { samples, skipped } = parseReport(`${now - 60} ${now - 3600} 1\n\n${now} ${now - 3600} 0\nnonsense\n${now - KEEP - 1} 1 1\n${now} ${now + 5} 1\n`, now);
 		assert.deepEqual(samples, [{ at: now - 60, boot: now - 3600, online: true }, { at: now, boot: now - 3600, online: false }]);
 		assert.equal(skipped, 3);
+		const report = parseReport(`${now} svc 7 1 152\n${now} svc 8 0 0\n${now} svc x 1 1\n`, now);
+		assert.deepEqual(report.checks, [{ at: now, service: 7, ok: true, ms: 152 }, { at: now, service: 8, ok: false, ms: 0 }]);
+		assert.equal(report.skipped, 1);
+	});
+
+	it('finds the time two lists have in common', () => {
+		assert.deepEqual(intersect([[0, 10], [20, 30]], [[5, 25], [28, 40]]), [[5, 10], [20, 25], [28, 30]]);
+		assert.deepEqual(intersect([[0, 10]], []), []);
+	});
+
+	it('takes service addresses it can check', () => {
+		for (const ok of ['https://git.example.com/api/healthz', 'wss://example.com/v1/ws', 'tcp://127.0.0.1:3306']) assert.equal(serviceProblem(ok), null, ok);
+		for (const bad of ['example.com', 'ftp://example.com', 'tcp://127.0.0.1', 'https://example.com/a b']) assert.ok(serviceProblem(bad), bad);
+		assert.ok(serviceProblem('https://example.com', 'two\tparts'));
 	});
 });
 
@@ -60,6 +74,30 @@ describe('the store', () => {
 		assert.equal(silent.year.tracked - silent.year.up, 650 + 660);
 		const s = store.servers()[0];
 		assert.deepEqual([s.first_at, s.last_at, s.last_online], [start, day2.at(-1)!.at, 1]);
+	});
+
+	it('a service is up while its server’s checks reach it and that server is online', () => {
+		const store = fresh();
+		store.addServer('db-host');
+		store.addServer('other');
+		const [host, other] = store.servers();
+		const id = store.addService({ name: 'MariaDB', server: 'db-host', url: 'tcp://127.0.0.1:3306', expect: 'MariaDB' })!;
+		assert.equal(store.addService({ name: 'x', server: 'nobody', url: 'tcp://127.0.0.1:1' }), null);
+		assert.equal(store.checksFor(host.id), `${id}\ttcp://127.0.0.1:3306\tMariaDB\n`);
+		const now = 50 * DAY;
+		const start = now - 60 * 60;
+		// An hour: the machine is offline for minutes 20–29, the service doesn't answer for minutes 40–44.
+		store.record(host.id, minutes(start, 60, start - 600, Array.from({ length: 10 }, (_, i) => 20 + i)),
+			Array.from({ length: 60 }, (_, i) => ({ at: start + i * 60, service: id, ok: i < 40 || i > 44, ms: 3 })));
+		// Another server can't report for it.
+		store.record(other.id, [], [{ at: now, service: id, ok: false, ms: 0 }]);
+		const service = store.services()[0];
+		assert.deepEqual([service.server, service.last_ok, service.last_ms, service.last_at], ['db-host', 1, 3, start + 59 * 60]);
+		const u = store.serviceUptime(service, now)!;
+		assert.equal(u.year.tracked, 60 * 60);
+		assert.equal(u.year.tracked - u.year.up, (10 + 5) * 60, 'offline minutes and failed checks');
+		assert.ok(store.removeService(id));
+		assert.equal(store.checksFor(host.id), '');
 	});
 
 	it('forgets what’s older than two years', () => {
