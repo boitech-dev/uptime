@@ -169,7 +169,7 @@ function serviceState(service, server, now) {
 	const age = now - service.lastAt;
 	if (age > STALE) return { key: 'silent', label: `No news for ${duration(age)}` };
 	if (server && !server.lastOnline) return { key: 'down', label: `Down: ${server.name} is offline` };
-	const speed = service.lastMs < 1000 ? `${service.lastMs} ms` : `${(service.lastMs / 1000).toFixed(1)} s`;
+	const speed = service.lastMs < 1 ? 'under 1 ms' : service.lastMs < 1000 ? `${service.lastMs} ms` : `${(service.lastMs / 1000).toFixed(1)} s`;
 	return service.lastOk ? { key: 'up', label: `Up, answered in ${speed}` } : { key: 'down', label: 'Down' };
 }
 
