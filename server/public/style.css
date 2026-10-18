@@ -98,7 +98,8 @@ code { font-size: 0.9em; padding: 0.1em 0.35em; border-radius: 4px; background: 
 .cards .empty { grid-column: 1 / -1; padding: 0; border: 0; color: var(--muted); }
 .card { display: flex; flex-direction: column; min-width: 0; padding: 1rem 1rem 0.875rem; border: 1px solid var(--rule); border-radius: 8px; }
 .card.down { border-color: color-mix(in srgb, var(--down) 50%, var(--rule)); }
-.card-head { display: flex; align-items: center; gap: 0.5rem; }
+.card-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+.card-head .dot { align-self: auto; margin-top: 0.4em; }
 .card h3 { margin: 0; min-width: 0; font-size: 1rem; font-weight: 650; overflow-wrap: anywhere; }
 .card .address { margin: 0.125rem 0 0; overflow: hidden; color: var(--muted); font-size: 0.8125rem; text-overflow: ellipsis; white-space: nowrap; }
 .card-state { margin: 0.625rem 0 0; font-size: 0.875rem; }
